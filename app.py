@@ -1,4 +1,5 @@
 import streamlit as st
+import openai
 
 # ============ تنظیمات اولیه ============
 st.set_page_config(
@@ -44,32 +45,45 @@ if "demographics" not in st.session_state:
     st.session_state.demographics = {}
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "condition" not in st.session_state:
+    st.session_state.condition = "C"
 
-# ============ تابع پاسخ موقت (بدون LLM) ============
-def get_mock_response(user_message, message_count):
-    """
-    پاسخ موقت برای تست ساختار چت.
-    در قدم بعدی، این تابع با LLM واقعی جایگزین می‌شود.
-    """
-    responses = [
-        "می‌شنوم. می‌تونی بیشتر توضیح بدی؟",
-        "این چیزیه که گفتی. چطور احساس می‌کنی؟",
-        "جالبه. از چه زمانی این حس رو داری؟",
-        "من اینجا هستم تا کمکت کنم. ادامه بده.",
-        "چه چیزی الان بیشتر از همه اذیتت می‌کنه؟"
-    ]
-    return responses[message_count % len(responses)]
+# ============ پرامپت‌های سه شرط ============
+SYSTEM_PROMPTS = {
+    "A": """تو یک دستیار هوشمند هستی. همیشه با اطمینان کامل پاسخ بده.
+هرگز تردید نشان نده. هرگز از عبارات احتمالی مثل «شاید» یا «احتمالاً» استفاده نکن.
+همیشه بگو «باید» یا «حتماً». پاسخ‌هایت کوتاه و قاطع باشند.""",
+
+    "B": """تو یک دستیار هوشمند هستی. همیشه با بیان احتمال پاسخ بده.
+از عبارات مثل «احتمالاً»، «ممکن است»، «شاید» استفاده کن.
+اما همیشه یک راه‌حل مشخص پیشنهاد بده. پاسخ‌هایت کوتاه و محتاط باشند.""",
+
+    "C": """تو یک دستیار هوشمند هستی. همیشه عدم‌قطعیت خود را با همدلی ترکیب کن.
+از عبارات مثل «مطمئن نیستم»، «به نظر می‌رسد» استفاده کن.
+همیشه از کاربر بپرس که خودش چه احساسی دارد.
+هرگز راه‌حل قطعی تحمیل نکن. پاسخ‌هایت کوتاه و پرسشگر باشند."""
+}
+
+def get_system_prompt(condition):
+    return SYSTEM_PROMPTS.get(condition, SYSTEM_PROMPTS["C"])
+
+# ============ اتصال به OpenAI ============
+def call_llm(system_prompt, messages):
+    client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "system", "content": system_prompt}] + messages
+    )
+    return response.choices[0].message.content
 
 # ============ صفحه ۱: خوش‌آمد ============
 if st.session_state.stage == "welcome":
     st.title("🤝 پژوهش درباره همدلی در دستیارهای هوشمند")
     st.write("""
      از اینکه در این پژوهش شرکت می‌کنید سپاسگزارم مهندس دانشفر.
-
    این آزمایش حدود ۱۰ تا ۱۵ دقیقه زمان می‌برد,
    اطلاعات شما به‌صورت ناشناس ذخیره می‌شود.
     """)
-
     if st.button("موافقم، شروع کن", type="primary"):
         st.session_state.stage = "demographics"
         st.rerun()
@@ -77,15 +91,12 @@ if st.session_state.stage == "welcome":
 # ============ صفحه ۲: اطلاعات پایه ============
 elif st.session_state.stage == "demographics":
     st.header("اطلاعات پایه")
-
     age = st.number_input("سن:", min_value=18, max_value=80, value=25)
     gender = st.selectbox("جنسیت:", ["زن", "مرد", "ترجیح می‌دهم نگویم"])
     field = st.text_input("رشته تحصیلی:")
     job = st.text_input("شغل:")
     ai_familiarity = st.slider("میزان آشنایی با AI:", 1, 5, 3)
-
     st.divider()
-
     if st.button("ادامه", type="primary"):
         st.session_state.demographics = {
             "age": age,
@@ -100,15 +111,12 @@ elif st.session_state.stage == "demographics":
 # ============ صفحه ۳: سناریو ============
 elif st.session_state.stage == "scenario":
     st.header("سناریو")
-
     st.write("""
     تصور کن در یک روز سخت، احساس خستگی و سردرگمی می‌کنی.
     نمی‌دانی باید به کارت ادامه بدهی یا استراحت کنی.
     تصمیم می‌گیری با یک دستیار هوشمند درباره این موضوع صحبت کنی.
     """)
-
     st.divider()
-
     if st.button("شروع گفتگو", type="primary"):
         st.session_state.stage = "chat"
         st.session_state.messages = []
@@ -118,22 +126,21 @@ elif st.session_state.stage == "scenario":
 elif st.session_state.stage == "chat":
     st.header("گفتگو با دستیار هوشمند")
 
-    # نمایش پیام‌های قبلی
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    # اگر کمتر از ۱۰ پیام است، ورودی نمایش بده
     if len(st.session_state.messages) < 10:
         user_input = st.chat_input("پیام خود را بنویسید...")
         if user_input:
-            # اضافه کردن پیام کاربر
             st.session_state.messages.append({"role": "user", "content": user_input})
 
-            # پاسخ موقت (بدون LLM)
-            response = get_mock_response(user_input, len(st.session_state.messages))
+            with st.spinner("در حال فکر کردن..."):
+                response = call_llm(
+                    get_system_prompt(st.session_state.condition),
+                    st.session_state.messages
+                )
             st.session_state.messages.append({"role": "assistant", "content": response})
-
             st.rerun()
     else:
         st.info("گفتگو به پایان رسید.")
@@ -145,7 +152,6 @@ elif st.session_state.stage == "chat":
 elif st.session_state.stage == "survey":
     st.header("پرسشنامه")
     st.warning("این صفحه در قدم بعدی ساخته می‌شود.")
-
     if st.button("برگشت به چت"):
         st.session_state.stage = "chat"
         st.rerun()
